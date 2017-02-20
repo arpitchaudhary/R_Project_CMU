@@ -1,0 +1,588 @@
+---
+title: "R Project Team 7"
+author: "Arpit, Swathi, Arvind, Ritu"
+date: "25 November 2016"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+#Introduction
+
+For the project we had to explore the posibility of AEDC variable % Developmentally vulnerable on two or more domains and use the following predictores :
+
+* Internet Access at home
+* Education
+
+#Methodology
+
+We read the 3 excel sheets which had the required data and then selected only the variables which we thought are relevant for the analysis.
+
+From AEDC sheet:
+
+* % Children developmentally vulnerable on two or more domains
+We took percentage instead of the number of children as they are redundant data.
+
+From Education sheet:
+
+* % full-time participation at age 16
+* ASR per 100
+
+From Internet Access at home sheet:
+
+* % dwellings with no Internet connection
+* % dwellings with Internet connections
+* % dwellings with Broadband Internet
+* % dwellings with Dial-up Internet
+* % dwellings with other Internet connections
+
+We looked at number of NAs for each row and found that a row had 9 NAs and the total columns were 12. Keeping this row did not make sense and thus we deleted this row.
+
+#Issues
+
+The issues we faced were with respect to what predictors to choose and how to deal with these variables. The other issue was to decide which variables to pick for the final model from the results we obtained from our correlation analysis.
+
+#Resolution
+
+In order to keep the model relevant, We also attempted to take one variable from internet as well as education to make the fianl model more relevant to our problem statement.
+
+#Business Implications
+
+This helped to understand the relation between internet access and education and what impact it has on % developmentally vulnerable on 2 or more domains. This helps to explain the how related these variables are and how varied levels of education or having internet access or not can impact our response variable.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(XLConnect)
+require(dplyr)
+require(Hmisc)
+require(corrplot)
+require(rgdal)
+require(tmap)
+require(knitr)
+require(car)
+require(ggplot2)
+require(ggthemes)
+require(ggmap)
+```
+
+#Analysis
+
+##1. Data preparation and clean-up
+
+```{r part_1, warning=FALSE}
+# Reading data from excel file.
+xl_workbook <- loadWorkbook("phidu_data_lga_sa.xls")
+AEDC <- readWorksheet(xl_workbook, sheet = "Early_childhood_development",
+                      header = TRUE, startRow = 5, endRow = 76)
+
+str(AEDC)
+dim(AEDC)
+
+education <- readWorksheet(xl_workbook, sheet = "Education",
+                           header = TRUE, startRow = 5, endRow = 76)
+
+str(education)
+dim(education)
+
+internet_access <- readWorksheet(xl_workbook, sheet = "Internet_access",
+                                 header = TRUE, startRow = 5, endRow = 76)
+str(internet_access)
+dim(internet_access)
+
+# Keeping ony required columns and renaming them to something sensible.
+AEDC <- AEDC %>%
+  dplyr::select(Code, Name,
+                vulnerable_on_2_domain_per =
+                  X..Children.developmentally.vulnerable.on.two.or.more.domains)
+
+str(AEDC)
+dim(AEDC)
+
+education <- education %>%
+  dplyr::select(Code,
+                education_at_16_per = X..full.time.participation.at.age.16,
+                left_school_at_10 = Number,
+                left_school_asr_per_100 = ASR.per.100)
+str(education)
+dim(education)
+
+internet_access <- internet_access %>%
+  select(Code,
+         no_internet_per = X..dwellings.with.no.Internet.connection,
+         total_internet_per = X..dwellings.with.Internet.connections,
+         broadband_internet_per = X..dwellings.with.Broadband.Internet,
+         dial_up_internet_per = X..dwellings.with.Dial.up.Internet,
+         other_internet_per = X..dwellings.with.other.Internet.connections)
+
+str(internet_access)
+dim(internet_access)
+
+# Joining all the data frames into 1 using Code variable.
+data <- AEDC %>% left_join(education) %>% left_join(internet_access)
+
+#Removing , from numerical column so that they can be converted to numerical.
+data <- data %>% mutate(left_school_at_10 = gsub(",", "", left_school_at_10))
+# Converting all numerical values to numeric as they were read as character by library.
+data <- data %>% mutate_at(vars(-Name), as.numeric)
+
+data <- data %>% mutate(LGA_type = gsub("[^\\(]*\\(", "", Name)) %>%
+  mutate(LGA_type = gsub(")", "", LGA_type)) %>%
+  mutate(Name = gsub(" \\(\\w+\\)", "", Name))
+
+# Finding the number of NAs for each row.
+rowSums(is.na(data))
+which(rowSums(is.na(data)) > 3)
+# This row has 9 NA's out of total 12 values and does not make sense to include it in our analysis.
+data <- data[rowSums(is.na(data)) < 3, ]
+
+# Imputing all NAs. This will substitute all NAs with median.
+data <- data %>% mutate_all(impute)
+```
+
+##2. Exploratory Data Analysis
+
+```{r part2}
+#library(plyr)
+count(data,'LGA_type')  # frequency tables for categorical variable LGA type
+
+#barplots for categorical variables
+ggplot(data=data, aes(x=LGA_type)) + geom_bar() + ggtitle("LGA Type Distribution") + theme_bw() + xlab("") + ylab("Count")
+
+#summary of numerical predictors % full-time participation at age 16,Number that left school at age 10 or below, ASRper100 of people who left school at year 10 or below, % dwellings with no internet access, % dwellings with total internet access, % dwellings with broadband internet access, % dwellings with dial-up internet access and % other internet access.
+
+summary(data$education_at_16_per)
+summary(data$left_school_at_10 )
+summary(data$left_school_asr_per_100)
+summary(data$no_internet_per)
+summary(data$total_internet_per)
+summary(data$broadband_internet_per)
+summary(data$dial_up_internet_per)
+summary(data$other_internet_per)
+
+#Histograms of Numeric predictors % full-time participation at age 16,Number that left school at age 10 or below, ASRper100 of people who left school at year 10 or below, % dwellings with no internet access, % dwellings with total internet access, % dwellings with broadband internet access, % dwellings with dial-up internet access and % other internet access.
+
+ggplot(data, aes(x=education_at_16_per)) + 
+  geom_histogram(bins=30, color = "white", fill = "black") + 
+  ggtitle("% Full-time Participation at age 16") + theme_bw()  #Histogram for % Full-time Participation at age 16
+
+ggplot(data, aes(x=left_school_at_10 )) +geom_histogram(bins=30, color = "white", fill = "black") +labs(
+       x = "Number that left school at age 10 or below",
+       y = "Count", title="Number that left school at age 10 or below distribution")
+
+
+ggplot(data, aes(x=left_school_asr_per_100)) + 
+  geom_histogram(bins=30, color = "white", fill = "black") +labs(
+       x = "ASRper100 of people who left school at year 10 or below",
+       y = "Count", title="ASRper100 of people who left school at year 10 or below distribution")
+
+ggplot(data, aes(x=no_internet_per)) + 
+  geom_histogram(bins=30, color = "white", fill = "black") +labs(
+       x = "% dwellings with no internet access",
+       y = "Count", title="% dwellings with no internet access distribution")
+
+ggplot(data, aes(x=total_internet_per)) + 
+  geom_histogram(bins=30, color = "white", fill = "black") +labs(
+       x = "% dwellings with total internet access",
+       y = "Count", title="% dwellings with total internet access distribution")
+
+ggplot(data, aes(x=other_internet_per)) + 
+  geom_histogram(bins=30, color = "white", fill = "black") +labs(
+       x = "% dwellings with other internet access",
+       y = "Count", title="% dwellings with other internet access distribution")
+
+ggplot(data, aes(x=dial_up_internet_per)) + 
+  geom_histogram(bins=30, color = "white", fill = "black") +labs(
+       x = "% dwellings with dial-up internet access",
+       y = "Count", title="% dwellings with dial-up internet access distribution")
+
+ggplot(data, aes(x=broadband_internet_per)) + 
+  geom_histogram(bins=30, color = "white", fill = "black") +labs(
+       x = "% dwellings with broadband internet access",
+       y = "Count", title="% dwellings with broadband internet access distribution")
+  
+#Summary tables of predictors and response by LGA type 
+
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(mean_edu_at_16_per =mean(education_at_16_per),
+                   max_edu_at_16_per=max(education_at_16_per),
+                   min_edu_at_16_per=min(education_at_16_per)) %>% kable 
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(mean_left_school_at_10 =mean(left_school_at_10),
+                   max_left_school_at_10=max(left_school_at_10),
+                   min_left_school_at_10=min(left_school_at_10)) %>% kable  
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(left_school_asr_per_100 =mean(left_school_asr_per_100),
+                   max_left_school_asr_per_100=max(left_school_asr_per_100),
+                   min_left_school_asr_per_100=min(left_school_asr_per_100)) %>% kable  
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(no_internet_per =mean(no_internet_per),
+                   max_no_internet_per=max(no_internet_per),
+                   min_no_internet_per=min(no_internet_per)) %>% kable 
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(total_internet_per =mean(total_internet_per),
+                   max_total_internet_per=max(total_internet_per),
+                   min_total_internet_per=min(total_internet_per)) %>% kable
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(broadband_internet_per =mean(broadband_internet_per),
+                   max_broadband_internet_per=max(broadband_internet_per),
+                   min_broadband_internet_per=min(broadband_internet_per)) %>% kable
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(other_internet_per =mean(other_internet_per),
+                   max_other_internet_per=max(other_internet_per),
+                   min_other_internet_per=min(other_internet_per)) %>% kable
+
+data %>% group_by(LGA_type)%>% 
+  dplyr::summarize(mean_dial_up_internet_per =mean(dial_up_internet_per),
+                   max_dial_up_internet_per=max(dial_up_internet_per),
+                   min_dial_up_internet_per=min(dial_up_internet_per)) %>% kable
+
+
+
+#Scatterplots of response variable AEDC % developmentally vulnerable on two or more domains versus all numeric predictors,  % full-time participation at age 16,Number that left school at age 10 or below, ASRper100 of people who left school at year 10 or below, % dwellings with no internet access, % dwellings with total internet access, % dwellings with broadband internet access, % dwellings with dial-up internet access and % other internet access.
+
+ggplot(data, aes(x=education_at_16_per, y=vulnerable_on_2_domain_per)) + geom_point() +labs(
+       x = "% full-time participation at age 16",
+       y = "% developmentally vulnerable on two or more domains", title="% Full-time Participation at age 16 vs % dev vulnerable on 2 or more domains")
+
+ggplot(data, aes(x=left_school_at_10, y=vulnerable_on_2_domain_per)) + geom_point() +labs(
+       x = "Number of people that left school at age 10 or below",
+       y = "% developmentally vulnerable on two or more domains", title="Number that left at 10 or below vs % dev vulnerable on 2 or more domains")
+
+ggplot(data, aes(x=left_school_asr_per_100, y=vulnerable_on_2_domain_per)) + geom_point() +labs(
+       x = "ASRper100 of people who left at year 10 or below",
+       y = "% developmentally vulnerable on two or more domains", title="ASRper100 of people who left at year 10 or below vs % dev vulnerable on 2 or more domains")
+
+ggplot(data, aes(x=no_internet_per, y=vulnerable_on_2_domain_per)) + geom_point() +labs(
+       x = "% dwellings with no internet access",
+       y = "% developmentally vulnerable on two or more domains", title="% dwellings with no internet access vs % dev vulnerable on 2 or more domains")
+
+ggplot(data, aes(x=total_internet_per, y=vulnerable_on_2_domain_per)) + geom_point() +labs(
+       x = "% dwellings with total internet access",
+       y = "% developmentally vulnerable on two or more domains", title="% dwellings with total internet access vs % dev vulnerable on 2 or more domains")
+
+ggplot(data, aes(x=dial_up_internet_per, y=vulnerable_on_2_domain_per)) + geom_point() +labs(
+       x = "% dwellings with dial-up internet access",
+       y = "% developmentally vulnerable on two or more domains", title="% dwellings with dial-up internet access vs % dev vulnerable on 2 or more domains")
+
+ggplot(data, aes(x=other_internet_per, y=vulnerable_on_2_domain_per)) + geom_point() +labs(
+       x = "% dwellings with other internet access",
+       y = "% developmentally vulnerable on two or more domains", title="% dwellings with other internet access vs % dev vulnerable on 2 or more domains")
+
+#boxplot of response variable % developmentally vulnerable on 2 or more domains for categorical  predictor LGA_type
+
+ggplot(data, aes(x = LGA_type, y = vulnerable_on_2_domain_per)) + geom_boxplot() +labs(
+       x = "LGA type",
+       y = "% developmentally vulnerable on two or more domains", title="LGA Type vs % dev vulnerable on 2 or more domains")
+
+```
+
+### Comments
+From the frequency table of LGA_Type we can see that the LGA_type DC is the most frequent with 41 occurrences followed by C with 21.
+
+The barplot for LGA type shows frequencies of each LGA Type. We can see that DC has the highest frequency of 41 followed by C which has a frequency of 21.
+
+###Summary of Numerical predictors
+% education at 16 is in the range 61.90 to 160.00
+Number that have left school at 10 or belo is in the range 310 to 40240
+ASR per 100 that have left school at 10 or below is in range 11.70 to 80.90
+% dwellings with no internet access is in the range 6.60 to 71.00
+% dwellings with total internet access is in the range 27.90 to 91.00
+% dwellings with broadband internet access is in the range 23.90 to 83.20
+% dwellings with dial up internet access is in the range 2.4 to 6.3
+% dwellings with other internet access is in the range 0.80 to 6.50
+
+###Analysing the histograms
+The most frequent % of full time participation at 16 is around 85%.
+There are over 18 instances where around 2500-3500 students have left school below at age 10 or below
+The most frequent occurrence of ASR per 100 that have left school at 10 or below is 34-36%.
+The most frequent occurrence of % dwellings with no internet access is 30-32%.
+The most frequent occurrence of % dwellings with total internet access is 64-66%
+The most frequent occurrence of % dwellings with dial up internet access is around 3.3-3.4%
+The most frequent occurrence of % dwellings with broadband internet access is 60-63%.
+The most frequent occurrence of % dwellings with other internet access is 60-63%.
+
+###Summary (grouped by LGA type)
+ The mean % of full time participation at 16 is highest in RegC and lowest in RC.
+ The mean number of students that left school at 10 or below is highest in C and lowest in Unincorporated part of SA.
+ The mean ASR per 100 of students that left school at 10 or below is highest in AC and lowest in C.
+ The mean % of dwellings with total internet access is highest in RegC and lowest in RC.
+ The mean % of dwellings with broadband is highest in RegC and lowest in RC and unincoprporated SA.
+ The mean % of dwellings with no internet access is highest in AC and lowest in RegC.
+ The mean % of dwellings with other internect access is highest in unincorporated SA and lowest in AC.
+ The mean % of dwellings with dial up is highest in DC and lowest in M.
+
+###Analysis of Scatterplot
+The most % of full time participation at 16 is concentrated between 80-90% that corresponds to between 15-20% being developmentally vulnerable on two or more domains
+Number that have left school at 10 or below are mostly concentrated between 1000 and 10000.
+The total internet access,no internet access, broadband, dial up and other do not show any specific relation or pattern.
+
+###Analysis of boxplot
+The boxplot b/w LGA Type and % developmentally vulnerable on two or more domains shows that the lga type AC has the highest mean, min and max values for % developmentally vulnerable on two or more domains
+
+##3. Creating Geographic maps of AEDC variable per LGA
+
+```{r part_3 , message=FALSE}
+# I extracted data from the zip file and the folder is copied parallel to the Rmd file.
+shp <- readOGR(dsn = "ASGC_LGA2011"           # folder with the .shp file
+               , layer = "LGA11aAust")
+
+# Exploring the data and summary.
+head(shp@data)
+str(shp@data)
+summary(shp@data)
+
+# Subsetting the data for South Australia. state code for South Australia is 4.
+shp_sa<-subset(shp,shp@data$STATE_CODE=="4")
+head(shp_sa@data)
+str(shp_sa@data)
+summary(shp_sa)
+data <- data %>% mutate(Code = as.character(Code))
+# Adding a column named code of type character to be able to join the 2 data frames.
+shp_sa@data <- shp_sa@data %>% mutate(Code = as.character(LGA_CODE11))
+shp_sa@data <- left_join(shp_sa@data, data)
+
+# Plotting the required map.
+qtm(shp_sa, "vulnerable_on_2_domain_per",format = "World"
+    ,text="LGA_NAME11",text.size="AREA"
+    ,borders="black", title = "% Children developmentally vulnerable on two or more domains"
+    )
+
+
+#plotting required ggmap
+address <- data$Name #the row that contains all the location is selected
+lonlat <- geocode(address) #this is setting the longitude and latitude
+data_new <- data
+data_new <- cbind(data_new,lonlat) #the latitude and longitude is added to the data 
+SAMap <- qmap(location = "South Australia", zoom = 6, color="bw", legend= "topleft")
+SAMap + geom_point(aes(x = lon, y = lat, colour = vulnerable_on_2_domain_per), data = data_new, size = 3)
+
+```
+
+##4. Performing Correlation Analysis
+
+```{r part_4}
+predictors <- data %>%
+  dplyr::select(-c(Code,Name, vulnerable_on_2_domain_per, LGA_type))
+
+corr <- cor(predictors)
+corrplot(corr, diag=T, method="number", order='hclust', addrect = 2, tl.cex=1)
+corrplot(corr, diag=T, order='hclust', tl.cex=1)
+```
+
+###Explaination of Correlation plot
+
+The correlation plot clearly shows that these variable pairs are highly correlated:
+
+ * (Positive) Total internet connection percentage and broadband internet percentage
+ * (Negative) Total internet connection percentage and Student who left school at 10 (ASR per 100)
+ * (Negative) Total internet connection percentage and no internet connection percentage
+ * (Negative) Broadband internet percentage and Student who left school at 10 (ASR per 100)
+ * (Negative) Broadband internet percentage and no internet connection percentage
+ * (Positive) No internet connection percentage and Student who left school at 10 (ASR per 100)
+
+Also, No internet connection percentage is not correlated to percentage of children going to school full time and thus they can be used to as a pair of predictors.
+
+##5. Regression model specification and refining:
+
+```{r part_4_Arv}
+#running regression
+reg_fit <- lm( vulnerable_on_2_domain_per ~ education_at_16_per +
+                 no_internet_per +
+                 LGA_type, data = data)
+#Reviewing regression summary for model1
+summary(reg_fit)
+```
+
+
+
+### Comments on Fstatistic and p-value for model-1
+The overall p-value for F-statistic is 1.088e-13 which is less that 1% hence the model is very significant.
+
+### Comments on variability for model-1
+The R-squared value(0.7225) for the model  shows a variaility of about 72.25%. The variability is hence fairly high.
+
+The Adjusted R-squared value which accounts for the number of predictor variables is 0.6809. This value gives us a more effective/realistic assesment of the variance. The Adjusted R-squared value also shows that the The model is good for regression as the variability is fairly high.
+
+### Analysis of Predictor: education_at_16_per
+
+Estimate of the education_at_16_per co-effeicient is -0.16648 whose p-value = 0.00177. The p-value is less than 1%. Hence the coefficient is very significant.
+
+The p-value is associated with 3 stars. This coeffeciet is hence very significant as the p-value is tending to 0
+
+Further we interpret that if education_at_16_per increases by 1 unit, vulnerable_on_2_domain_per decreases by 0.16648
+
+### Analysis of Predictor: Predictor: no_internet_per
+
+Estimate of the no_internet_per co-effeicient is 0.35275 whose p-value = 0.00165. The p-value is less than 1%. Hence the no_internet_per coefficient is also very significant.
+
+The p-value is associated with 2 stars. This coeffecient is hence substantially significant as the p-value is tending to 0.001
+
+Further we interpret that if no_internet_per increases by 1 unit, vulnerable_on_2_domain_per increases by 0.35275 units
+
+
+### Analysis of Predictor: LGA_type
+
+
+#### LGA_typeC
+Estimate of the LGA_typeC co-effeicient is -40.37263 whose p-value = 7.09e-07 . The p-value is less than 1%. Hence the LGA_typeC coefficient is very significant.
+
+The p-value is associated with 2 stars. This coeffecient is hence substantially significant as the p-value is tending to 0.001
+
+Further we interpret that if LGA_typeC increases by 1 unit, vulnerable_on_2_domain_per decreases by -40.37263 units
+
+
+#### LGA_typeDC
+
+Estimate of the LGA_typeDC co-effeicient is -40.83534 whose p-value = 1.32e-07. The p-value is less than 1%. Hence the LGA_typeDC coefficient is very significant
+
+The p-value is associated with 3 stars. This coeffecient is hence very significant as the p-value is tending to 0
+
+Further we interpret that if LGA_typeDC increases by 1 unit, vulnerable_on_2_domain_per decreases by -40.83534 units
+
+
+#### LGA_typeM
+
+Estimate of the LGA_typeM co-effeicient is -38.31829 whose p-value = 1.09e-05. The p-value is less than 1%. Hence the LGA_typeM coefficient is very significant
+
+The p-value is associated with 3 stars. This coeffecient is hence very significant as the p-value is tending to 0
+
+Further we interpret that if LGA_typeM increases by 1 unit, vulnerable_on_2_domain_per decreases by -38.31829 units
+
+
+#### LGA_typeRC
+
+Estimate of the LGA_typeRC co-effeicient is -37.61549 whose p-value = 3.06e-05. The p-value is less than 1%. Hence the LGA_typeRC coefficient is very significant
+
+The p-value is associated with 3 stars. This coeffecient is hence very significant as the p-value is tending to 0
+
+Further we interpret that if LGA_typeRC increases by 1 unit, vulnerable_on_2_domain_per decreases by -37.61549  units
+
+
+#### LGA_typeRegC
+
+Estimate of the LGA_typeRegC co-effeicient is -41.08524 whose p-value = 3.04e-05. The p-value is less than 1%. Hence the LGA_typeRC coefficient is very significant
+
+The p-value is associated with 3 stars. This coeffecient is hence very significant as the p-value is tending to 0
+
+Further we interpret that if LGA_typeRegC increases by 1 unit, vulnerable_on_2_domain_per decreases by -41.08524 units
+
+
+#### LGA_typeT
+
+Estimate of the LGA_typeT co-effeicient is -40.62743 whose p-value = 1.73e-05. The p-value is less than 1%. Hence the LGA_typeT coefficient is very significant
+
+The p-value is associated with 3 stars. This coeffecient is hence very significant as the p-value is tending to 0
+
+Further we interpret that if LGA_typeT increases by 1 unit, vulnerable_on_2_domain_per decreases by -40.62743 units
+
+#### LGA_typeUnincorporated SA
+
+Estimate of the LGA_typeUnincorporated SA co-effeicient is -29.36646 whose p-value = 0.00120. The p-value is less than 1%. Hence the LGA_typeUnincorporated SA coefficient is very significant
+
+The p-value is associated with 2 stars. This coeffecient is hence substantially significant as the p-value is tending to 0.001
+
+Further we interpret that if LGA_typeUnincorporated SA increases by 1 unit, vulnerable_on_2_domain_per decreases by -29.36646 units
+
+
+### Comments on Residual standard error for model1
+
+We find that the residual standard error is only 5.078 on 60 degrees of freedom. This tells us that the  vulnerable_on_2_domain_per value predicted by the model is fairly close to the actual value.
+
+
+##6. Running residual Diagnostics
+
+#### RESIDUALS VS FITTED PLOT
+```{r part_5_Arv}
+#Running residual analysis
+
+# RESIDUALS VS FITTED PLOT
+plot(reg_fit, which=1  ) # plot regression  diagnostics plot for ref_fit
+
+
+```
+
+#### Analysis - RESIDUALS VS FITTED PLOT :
+
+The RESIDUALS VS FITTED PLOT depicts that the residual points are randomly scattered on either side of regression line. They do not form any particular pattern. 
+Hence, the plot indicates that the model does not have a non-linear relationship and is therefore valid.
+
+### Check for Normaility
+```{r part_6_Arv}
+
+#CHECK FOR NORMAITY -> Q-Q PLOT
+plot(reg_fit, which=2)
+
+```
+
+### Analysis - Normality Check:
+
+The plot shows that the residuals are normally distributed. The residuals do not deviate severely from the median.
+
+This further confirms that this is a good model 
+
+### Outlier Test
+```{r part_7_Arv}
+
+#RUNNING CHECK FOR OUTLIERS -OUTLIER TEST
+outlierTest(reg_fit)
+
+```
+### Analysis - Outlier Test:
+
+The test indicates that the row# 18 could be an outlier for the predicted response. 
+
+### Influential Observations : Cooks'D Plot
+```{r part_8_Arv}
+#CHECKING FOR INFLUENTIAL OBSERVATIONS USING COOK'S D PLOT
+
+plot(reg_fit, which=4)   # plot regression (cook's d-plot)  diagnostics for fit1 
+
+```
+
+### Analysis - Cooks's D Plot:
+
+The Cook's d plot once again indicates that row#18 has the highest cook's distance and is hence a outlier. row#18 could possibly be an infuential variable.
+
+Let us validate this by excluding row#18 from our analysis as follows:
+
+### Influential Observations - On removing row number 18
+```{r}
+
+data_new <- data
+
+data_new <- data_new %>% filter(row.names(data_new)!= 18)  # exclude outlier from the modelling
+
+#Therefore -  running regression on iris_new2
+reg_fit2 <- lm( vulnerable_on_2_domain_per ~ education_at_16_per + 
+                 no_internet_per  + 
+                 LGA_type, 
+               data = data_new)
+
+
+#Reviewing regression summary - regression analysis
+summary(reg_fit2)
+
+# RESIDUALS VS FITTED PLOT
+plot(reg_fit2, which=1  ) # plot regression  diagnostics plot for ref_fit2
+
+#CHECK FOR NORMAITY -> Q-Q PLOT
+plot(reg_fit2, which = 2)
+
+
+#CHECKING FOR INFLUENTIAL OBSERVATIONS USING COOK'S D PLOT
+plot(reg_fit2, which=4)   # plot regression (cook's d-plot)  diagnostics for ref_fit2 
+
+```
+### Analysis: 
+
+On excluding row#18 and performing regression analysis/residual analysis, we find that the new model has 3 outliers viz 47 51 53. Further, we observe that the residuals deviate from the edian to a greater extent in this case. 
+
+Row#18 is hence an influencial variable to the linear regression model and we must therefore not exclude it.
